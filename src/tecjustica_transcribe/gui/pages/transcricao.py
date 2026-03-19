@@ -5,6 +5,7 @@ from __future__ import annotations
 import queue
 import tempfile
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from nicegui import events, ui
@@ -25,22 +26,65 @@ ETAPAS_PROGRESSO = {
     "salvando": 1.00,
 }
 
+ETAPAS_LABELS = {
+    "modelo": "Carregando modelo",
+    "audio": "Processando áudio",
+    "transcricao": "Transcrevendo",
+    "alinhamento": "Alinhando timestamps",
+    "diarizacao": "Identificando falantes",
+    "salvando": "Salvando arquivos",
+}
+
+
+@dataclass
+class _EstadoTranscricao:
+    """Estado global que persiste entre navegações de página."""
+
+    transcrevendo: bool = False
+    progresso_valor: float = 0.0
+    progresso_msg: str = ""
+    progresso_etapa: str = ""
+    resultado: TranscriptionResult | None = None
+    erro: str | None = None
+    arquivo: str = ""
+    fila: queue.Queue = field(default_factory=queue.Queue)
+
+    def resetar(self) -> None:
+        self.transcrevendo = True
+        self.progresso_valor = 0.0
+        self.progresso_msg = "Iniciando..."
+        self.progresso_etapa = ""
+        self.resultado = None
+        self.erro = None
+        while not self.fila.empty():
+            try:
+                self.fila.get_nowait()
+            except queue.Empty:
+                break
+
+
+_estado = _EstadoTranscricao()
+
 
 def conteudo() -> None:
     """Renderiza a página de transcrição."""
-    progress_queue: queue.Queue = queue.Queue()
-    estado = {"transcrevendo": False}
 
-    ui.label("Transcrever Audiência").classes("text-h5 text-bold q-mb-md")
+    # ---- Header ----
+    with ui.row().classes("w-full items-center q-mb-md"):
+        ui.icon("mic").classes("text-2xl").style("color: var(--accent)")
+        ui.label("TRANSCREVER").classes("vsc-section").style(
+            "font-size: 13px !important; margin-bottom: 0 !important"
+        )
 
-    # --- Seleção de arquivo ---
-    with ui.card().classes("w-full q-mb-md"):
-        ui.label("Arquivo de Áudio/Vídeo").classes("text-subtitle1 text-bold")
+    # ---- Arquivo ----
+    with ui.card().classes("vsc-panel w-full q-mb-sm"):
+        ui.label("ARQUIVO").classes("vsc-section")
 
         caminho_input = ui.input(
             label="Caminho do arquivo",
-            placeholder="/mnt/c/.../audiencia.mp4",
-        ).classes("w-full")
+            placeholder="/mnt/c/Users/.../audiencia.mp4",
+            value=_estado.arquivo,
+        ).classes("vsc-input mono w-full")
 
         def on_upload(e: events.UploadEventArguments) -> None:
             temp_dir = Path(tempfile.gettempdir()) / "tecjustica"
@@ -48,103 +92,46 @@ def conteudo() -> None:
             dest = temp_dir / e.name
             dest.write_bytes(e.content.read())
             caminho_input.value = str(dest)
+            _estado.arquivo = str(dest)
             ui.notify(f"Arquivo carregado: {e.name}", type="positive")
 
-        ui.upload(
-            label="Ou arraste um arquivo aqui",
-            on_upload=on_upload,
-            auto_upload=True,
-        ).props('accept=".mp4,.wav,.mp3,.m4a,.ogg,.flac" max-file-size=524288000').classes(
-            "w-full"
-        )
+        with ui.element("div").classes("vsc-upload w-full q-mt-xs"):
+            ui.upload(
+                label="Arrastar arquivo aqui",
+                on_upload=on_upload,
+                auto_upload=True,
+            ).props(
+                'accept=".mp4,.wav,.mp3,.m4a,.ogg,.flac" '
+                "max-file-size=524288000 flat bordered"
+            ).classes("w-full")
 
-    # --- Opções ---
-    with ui.card().classes("w-full q-mb-md"):
-        ui.label("Opções").classes("text-subtitle1 text-bold")
+    # ---- Opções ----
+    with ui.card().classes("vsc-panel w-full q-mb-sm"):
+        ui.label("OPÇÕES").classes("vsc-section")
 
         with ui.row().classes("w-full items-end gap-4"):
             output_input = ui.input(
                 label="Pasta de saída",
                 value="./transcricoes",
-            ).classes("flex-1")
+            ).classes("vsc-input mono flex-1")
 
             modelo_select = ui.select(
                 options=["large-v2", "medium", "small", "tiny"],
                 value="large-v2",
                 label="Modelo",
-            ).classes("w-40")
+            ).classes("vsc-select").style("min-width: 140px")
 
-        diarizacao_switch = ui.switch(
-            "Identificar falantes (diarização)", value=True
-        ).classes("q-mt-sm")
+        with ui.element("div").classes("vsc-switch q-mt-sm"):
+            diarizacao_switch = ui.switch(
+                "Identificar falantes (diarização)", value=True
+            )
 
-    # --- Progresso (oculto até iniciar) ---
-    progresso_card = ui.card().classes("w-full q-mb-md")
-    progresso_card.visible = False
-
-    with progresso_card:
-        progresso_label = ui.label("Iniciando...").classes("text-subtitle2")
-        progresso_bar = ui.linear_progress(value=0, show_value=False).classes(
-            "w-full"
-        )
-
-    # --- Resultado (oculto até concluir) ---
-    resultado_card = ui.card().classes("w-full q-mb-md")
-    resultado_card.visible = False
-
-    with resultado_card:
-        ui.icon("check_circle", color="positive").classes("text-3xl")
-        resultado_label = ui.label("").classes("q-mt-sm")
-
-    # --- Erro (oculto) ---
-    erro_label = ui.label("").classes("text-negative text-bold")
-    erro_label.visible = False
-
-    # --- Timer para consumir fila de progresso ---
-    def check_progress() -> None:
-        while not progress_queue.empty():
-            try:
-                item = progress_queue.get_nowait()
-            except queue.Empty:
-                break
-
-            if item[0] == "progress":
-                _, etapa, msg = item
-                progresso_label.text = msg
-                if etapa in ETAPAS_PROGRESSO:
-                    progresso_bar.value = ETAPAS_PROGRESSO[etapa]
-
-            elif item[0] == "done":
-                result: TranscriptionResult = item[1]
-                estado["transcrevendo"] = False
-                btn_transcrever.enable()
-                progresso_label.text = "Concluído!"
-                progresso_bar.value = 1.0
-                resultado_card.visible = True
-                resultado_label.text = (
-                    f"Arquivos gerados em {result.caminho_txt.parent}/:\n"
-                    f"  {result.caminho_txt.name} (texto puro)\n"
-                    f"  {result.caminho_srt.name} (legendas)\n"
-                    f"  {result.caminho_json.name} (dados completos)"
-                )
-                ui.notify("Transcrição concluída!", type="positive")
-
-            elif item[0] == "error":
-                error_msg = item[1]
-                estado["transcrevendo"] = False
-                btn_transcrever.enable()
-                progresso_card.visible = False
-                erro_label.text = f"Erro: {error_msg}"
-                erro_label.visible = True
-                ui.notify(f"Erro: {error_msg}", type="negative")
-
-    ui.timer(0.5, check_progress)
-
-    # --- Botão transcrever ---
+    # ---- Botão transcrever ----
     def transcrever() -> None:
         arquivo = caminho_input.value.strip()
+        _estado.arquivo = arquivo
         if not arquivo:
-            ui.notify("Selecione um arquivo primeiro", type="warning")
+            ui.notify("Selecione um arquivo", type="warning")
             return
 
         if not Path(arquivo).exists():
@@ -161,14 +148,16 @@ def conteudo() -> None:
                 )
                 return
 
-        # Resetar UI
-        estado["transcrevendo"] = True
+        _estado.resetar()
         btn_transcrever.disable()
-        progresso_card.visible = True
-        resultado_card.visible = False
+        progresso_panel.visible = True
+        resultado_panel.visible = False
         erro_label.visible = False
         progresso_bar.value = 0
         progresso_label.text = "Iniciando..."
+        # Limpar etapas visuais
+        for el in etapa_elements.values():
+            el.style("opacity: 0.3")
 
         config = TranscriptionConfig(
             arquivo=Path(arquivo),
@@ -182,16 +171,150 @@ def conteudo() -> None:
                 result = executar_pipeline(
                     config,
                     hf_token=token,
-                    on_progress=lambda etapa, msg: progress_queue.put(
+                    on_progress=lambda etapa, msg: _estado.fila.put(
                         ("progress", etapa, msg)
                     ),
                 )
-                progress_queue.put(("done", result))
+                _estado.fila.put(("done", result))
             except Exception as e:
-                progress_queue.put(("error", str(e)))
+                _estado.fila.put(("error", str(e)))
 
         threading.Thread(target=run, daemon=True).start()
 
     btn_transcrever = ui.button(
-        "Transcrever", icon="mic", on_click=transcrever
-    ).classes("bg-primary text-white text-bold")
+        "Transcrever", icon="play_arrow", on_click=transcrever
+    ).classes("vsc-btn q-mt-sm")
+
+    if _estado.transcrevendo:
+        btn_transcrever.disable()
+
+    # ---- Progresso ----
+    progresso_panel = ui.card().classes("vsc-panel w-full q-mt-sm")
+    progresso_panel.visible = _estado.transcrevendo or (
+        _estado.resultado is not None and _estado.erro is None
+    )
+
+    etapa_elements: dict[str, object] = {}
+
+    with progresso_panel:
+        ui.label("PROGRESSO").classes("vsc-section")
+
+        progresso_bar = ui.linear_progress(
+            value=_estado.progresso_valor, show_value=False
+        ).classes("vsc-progress w-full")
+
+        progresso_label = ui.label(
+            _estado.progresso_msg or "Iniciando..."
+        ).classes("mono").style("font-size: 12px; color: var(--text-dim); margin-top: 8px")
+
+        # Etapas visuais
+        with ui.column().classes("w-full gap-0 q-mt-sm"):
+            for etapa_key, etapa_label in ETAPAS_LABELS.items():
+                with ui.row().classes("items-center gap-2").style(
+                    "padding: 3px 0"
+                ) as row:
+                    done = (
+                        ETAPAS_PROGRESSO.get(etapa_key, 0)
+                        <= _estado.progresso_valor
+                        and _estado.progresso_valor > 0
+                    )
+                    is_current = _estado.progresso_etapa == etapa_key
+                    if done:
+                        ui.icon("check", size="16px").classes("check-ok")
+                    elif is_current:
+                        ui.spinner(size="16px").style("color: var(--accent)")
+                    else:
+                        ui.icon("radio_button_unchecked", size="16px").style(
+                            "color: var(--border)"
+                        )
+                    ui.label(etapa_label).style("font-size: 12px")
+
+                opacity = "1" if done or is_current else "0.3"
+                row.style(f"opacity: {opacity}")
+                etapa_elements[etapa_key] = row
+
+    # ---- Resultado ----
+    resultado_panel = ui.card().classes("vsc-panel w-full q-mt-sm")
+    resultado_panel.visible = _estado.resultado is not None
+
+    with resultado_panel:
+        with ui.row().classes("items-center gap-2"):
+            ui.icon("check_circle", size="20px").classes("check-ok")
+            ui.label("CONCLUÍDO").classes("vsc-section").style(
+                "margin-bottom: 0 !important; color: var(--success) !important"
+            )
+
+        resultado_texto = ""
+        if _estado.resultado:
+            r = _estado.resultado
+            resultado_texto = (
+                f"{r.caminho_txt.parent}/\n"
+                f"  {r.caminho_txt.name}   (texto puro)\n"
+                f"  {r.caminho_srt.name}   (legendas SRT)\n"
+                f"  {r.caminho_json.name}  (dados completos)"
+            )
+        resultado_label = ui.label(resultado_texto).classes("mono").style(
+            "white-space: pre; font-size: 12px; margin-top: 8px; "
+            "color: var(--text); line-height: 1.6"
+        )
+
+    # ---- Erro ----
+    erro_label = ui.label(
+        f"Erro: {_estado.erro}" if _estado.erro else ""
+    ).classes("mono").style(
+        "color: var(--error); font-size: 12px; margin-top: 8px"
+    )
+    erro_label.visible = _estado.erro is not None
+
+    # ---- Timer para fila de progresso ----
+    def check_progress() -> None:
+        while not _estado.fila.empty():
+            try:
+                item = _estado.fila.get_nowait()
+            except queue.Empty:
+                break
+
+            if item[0] == "progress":
+                _, etapa, msg = item
+                _estado.progresso_msg = msg
+                _estado.progresso_etapa = etapa
+                progresso_label.text = msg
+                if etapa in ETAPAS_PROGRESSO:
+                    _estado.progresso_valor = ETAPAS_PROGRESSO[etapa]
+                    progresso_bar.value = ETAPAS_PROGRESSO[etapa]
+                # Atualizar etapas visuais
+                for ek, el in etapa_elements.items():
+                    if ETAPAS_PROGRESSO.get(ek, 0) <= _estado.progresso_valor:
+                        el.style("opacity: 1")
+
+            elif item[0] == "done":
+                result: TranscriptionResult = item[1]
+                _estado.transcrevendo = False
+                _estado.resultado = result
+                _estado.progresso_msg = "Concluído!"
+                _estado.progresso_valor = 1.0
+                btn_transcrever.enable()
+                progresso_label.text = "Concluído!"
+                progresso_bar.value = 1.0
+                resultado_panel.visible = True
+                for el in etapa_elements.values():
+                    el.style("opacity: 1")
+                resultado_label.text = (
+                    f"{result.caminho_txt.parent}/\n"
+                    f"  {result.caminho_txt.name}   (texto puro)\n"
+                    f"  {result.caminho_srt.name}   (legendas SRT)\n"
+                    f"  {result.caminho_json.name}  (dados completos)"
+                )
+                ui.notify("Transcrição concluída!", type="positive")
+
+            elif item[0] == "error":
+                error_msg = item[1]
+                _estado.transcrevendo = False
+                _estado.erro = error_msg
+                btn_transcrever.enable()
+                progresso_panel.visible = False
+                erro_label.text = f"Erro: {error_msg}"
+                erro_label.visible = True
+                ui.notify(f"Erro: {error_msg}", type="negative")
+
+    ui.timer(0.5, check_progress)

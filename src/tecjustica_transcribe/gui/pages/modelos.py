@@ -1,4 +1,4 @@
-"""Página de gerenciamento de modelos — download/exclusão com progresso."""
+"""Página de gerenciamento de modelos — download/exclusão."""
 
 from __future__ import annotations
 
@@ -13,68 +13,86 @@ from tecjustica_transcribe.core.models import (
     listar_modelos,
 )
 
+_progress_queue: queue.Queue = queue.Queue()
+
 
 def conteudo() -> None:
     """Renderiza a página de modelos."""
-    progress_queue: queue.Queue = queue.Queue()
 
-    ui.label("Gerenciamento de Modelos").classes("text-h5 text-bold q-mb-md")
-    ui.label(
-        "Modelos WhisperX armazenados em ~/.cache/huggingface/hub/"
-    ).classes("text-caption text-grey q-mb-md")
+    with ui.row().classes("w-full items-center q-mb-md"):
+        ui.icon("inventory_2").classes("text-2xl").style("color: var(--accent)")
+        ui.label("MODELOS").classes("vsc-section").style(
+            "font-size: 13px !important; margin-bottom: 0 !important"
+        )
 
-    container = ui.column().classes("w-full gap-2")
+    ui.label("Modelos WhisperX em ~/.cache/huggingface/hub/").classes(
+        "mono"
+    ).style("font-size: 11px; color: var(--text-dim); margin-bottom: 12px")
+
+    container = ui.column().classes("w-full gap-1")
 
     def refresh() -> None:
         container.clear()
         modelos = listar_modelos()
         with container:
             for m in modelos:
-                with ui.card().classes("w-full"):
-                    with ui.row().classes("w-full items-center justify-between"):
+                with ui.row().classes(
+                    "vsc-row w-full items-center justify-between"
+                ):
+                    with ui.row().classes("items-center gap-3"):
+                        if m.downloaded:
+                            ui.icon("check_circle", size="18px").classes(
+                                "check-ok"
+                            )
+                        else:
+                            ui.icon("cloud_download", size="18px").style(
+                                "color: var(--text-dim)"
+                            )
+
                         with ui.column().classes("gap-0"):
-                            ui.label(m.name).classes("text-bold text-lg")
+                            ui.label(m.name).classes("mono").style(
+                                "font-size: 13px; font-weight: 500"
+                            )
                             tamanho = (
                                 f"{m.size_mb / 1000:.1f} GB"
                                 if m.size_mb >= 1000
                                 else f"{m.size_mb} MB"
                             )
-                            ui.label(f"Tamanho: ~{tamanho}").classes(
-                                "text-caption text-grey"
+                            status = "Baixado" if m.downloaded else "Não baixado"
+                            ui.label(f"~{tamanho}  ·  {status}").style(
+                                "font-size: 11px; color: var(--text-dim)"
                             )
 
-                        with ui.row().classes("items-center gap-2"):
-                            if m.downloaded:
-                                ui.icon("check_circle", color="positive").classes(
-                                    "text-2xl"
-                                )
-                                ui.label("Baixado").classes("text-positive")
-                                ui.button(
-                                    "Excluir",
-                                    icon="delete",
-                                    on_click=lambda n=m.name: confirmar_exclusao(n),
-                                ).props("flat color=negative size=sm")
-                            else:
-                                ui.icon("cloud_download", color="grey").classes(
-                                    "text-2xl"
-                                )
-                                ui.button(
-                                    "Baixar",
-                                    icon="download",
-                                    on_click=lambda n=m.name: download(n),
-                                ).props("flat color=primary size=sm")
+                    if m.downloaded:
+                        ui.button(
+                            "Excluir",
+                            icon="delete_outline",
+                            on_click=lambda n=m.name: confirmar_exclusao(n),
+                        ).classes("vsc-btn-danger")
+                    else:
+                        ui.button(
+                            "Baixar",
+                            icon="download",
+                            on_click=lambda n=m.name: download(n),
+                        ).classes("vsc-btn-flat")
 
     def confirmar_exclusao(name: str) -> None:
-        with ui.dialog() as dialog, ui.card():
-            ui.label(f"Excluir modelo {name}?").classes("text-bold")
-            ui.label("O modelo será removido do cache local.").classes("text-grey")
-            with ui.row().classes("w-full justify-end gap-2"):
-                ui.button("Cancelar", on_click=dialog.close).props("flat")
+        with ui.dialog() as dialog, ui.card().classes("vsc-panel"):
+            ui.label(f"Excluir modelo {name}?").style(
+                "font-weight: 500; font-size: 14px"
+            )
+            ui.label("O modelo será removido do cache local.").style(
+                "font-size: 12px; color: var(--text-dim)"
+            )
+            with ui.row().classes("w-full justify-end gap-2 q-mt-md"):
+                ui.button("Cancelar", on_click=dialog.close).classes(
+                    "vsc-btn-flat"
+                )
                 ui.button(
                     "Excluir",
-                    icon="delete",
+                    icon="delete_outline",
                     on_click=lambda: excluir(name, dialog),
-                ).props("color=negative")
+                ).classes("vsc-btn-danger")
         dialog.open()
 
     def excluir(name: str, dialog: object) -> None:
@@ -84,35 +102,31 @@ def conteudo() -> None:
         ui.notify(f"Modelo {name} excluído", type="info")
 
     def download(name: str) -> None:
-        ui.notify(f"Baixando modelo {name}... Isso pode demorar.", type="info")
+        ui.notify(f"Baixando {name}... Isso pode demorar.", type="info")
 
         def run() -> None:
             try:
                 baixar_modelo(
                     name,
-                    on_progress=lambda msg: progress_queue.put(("info", msg)),
+                    on_progress=lambda msg: _progress_queue.put(("info", msg)),
                 )
-                progress_queue.put(("done", name))
+                _progress_queue.put(("done", name))
             except Exception as e:
-                progress_queue.put(("error", str(e)))
+                _progress_queue.put(("error", str(e)))
 
         threading.Thread(target=run, daemon=True).start()
 
     def check_progress() -> None:
-        while not progress_queue.empty():
+        while not _progress_queue.empty():
             try:
-                item = progress_queue.get_nowait()
+                item = _progress_queue.get_nowait()
             except queue.Empty:
                 break
-
-            if item[0] == "info":
-                ui.notify(item[1], type="info")
-            elif item[0] == "done":
+            if item[0] == "done":
                 ui.notify(f"Modelo {item[1]} baixado!", type="positive")
                 refresh()
             elif item[0] == "error":
                 ui.notify(f"Erro: {item[1]}", type="negative")
 
     ui.timer(1.0, check_progress)
-
     refresh()
