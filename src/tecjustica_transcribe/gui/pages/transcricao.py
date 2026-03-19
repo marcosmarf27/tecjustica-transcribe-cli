@@ -369,22 +369,31 @@ def conteudo() -> None:
 
                     segment_rows.append((row, start, end))
 
-        # Highlight do segmento ativo
+        # Highlight do segmento ativo (só atualiza quando muda)
+        active_idx: list[int] = [-1]
+
         def _on_timeupdate(e) -> None:
             t = e.args[0] if isinstance(e.args, (list, tuple)) else e.args
             if not isinstance(t, (int, float)):
                 return
-            for r, s, se in segment_rows:
+            new_idx = -1
+            for i, (_r, s, se) in enumerate(segment_rows):
                 if s <= t < se:
-                    r.classes(add="active")
-                else:
-                    r.classes(remove="active")
+                    new_idx = i
+                    break
+            if new_idx == active_idx[0]:
+                return
+            if 0 <= active_idx[0] < len(segment_rows):
+                segment_rows[active_idx[0]][0].classes(remove="active")
+            if 0 <= new_idx < len(segment_rows):
+                segment_rows[new_idx][0].classes(add="active")
+            active_idx[0] = new_idx
 
         player.on(
             "timeupdate",
             _on_timeupdate,
             ["event.target.currentTime"],
-            throttle=0.5,
+            throttle=1.0,
         )
 
     # Restaurar se já houver resultado (navegação entre páginas)
