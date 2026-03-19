@@ -395,6 +395,7 @@ def _layout(pagina_ativa: str, conteudo_fn: Callable[[], None]) -> None:
 
 def main() -> None:
     """Inicia a GUI desktop."""
+    print("⏳ Carregando TecJustiça Transcribe — aguarde...")
     from nicegui import ui
 
     from tecjustica_transcribe.gui.pages import (
