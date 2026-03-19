@@ -296,8 +296,7 @@ def conteudo() -> None:
     def _popular_midia(result: TranscriptionResult) -> None:
         """Popula player e transcrição clicável."""
         arquivo_path = Path(_estado.arquivo)
-        app.add_media_files("/media", str(arquivo_path.parent))
-        _estado.media_url = f"/media/{arquivo_path.name}"
+        _estado.media_url = app.add_media_file(local_file=arquivo_path)
 
         # Player
         player_panel.visible = True
