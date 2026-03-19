@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import platform
 import queue
+import subprocess
 import tempfile
 import threading
 from dataclasses import dataclass, field
@@ -67,6 +70,23 @@ class _EstadoTranscricao:
 
 
 _estado = _EstadoTranscricao()
+
+def _abrir_no_sistema(caminho: Path) -> None:
+    """Abre arquivo ou pasta com o aplicativo padrão do SO."""
+    try:
+        if not caminho.exists():
+            ui.notify(f"Não encontrado: {caminho}", type="negative")
+            return
+        sistema = platform.system()
+        if sistema == "Windows":
+            os.startfile(str(caminho))  # type: ignore[attr-defined]
+        elif sistema == "Darwin":
+            subprocess.Popen(["open", str(caminho)])
+        else:
+            subprocess.Popen(["xdg-open", str(caminho)])
+    except Exception as exc:
+        ui.notify(f"Erro ao abrir: {exc}", type="negative")
+
 
 def _formatar_timestamp(segundos: float) -> str:
     """Formata segundos como MM:SS ou H:MM:SS."""
@@ -311,10 +331,15 @@ def conteudo() -> None:
                     ui.button(
                         label,
                         icon=icone,
-                        on_click=lambda p=caminho: ui.download(
-                            p.read_bytes(), p.name
-                        ),
+                        on_click=lambda p=caminho: _abrir_no_sistema(p),
                     ).classes("vsc-btn")
+                ui.button(
+                    "Abrir pasta",
+                    icon="folder_open",
+                    on_click=lambda: _abrir_no_sistema(
+                        result.caminho_txt.parent
+                    ),
+                ).classes("vsc-btn-flat")
 
         # Transcrição (somente leitura)
         transcricao_panel.visible = True
