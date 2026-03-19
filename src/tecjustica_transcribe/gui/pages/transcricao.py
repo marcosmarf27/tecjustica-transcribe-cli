@@ -86,16 +86,16 @@ def conteudo() -> None:
             value=_estado.arquivo,
         ).classes("vsc-input mono w-full")
 
-        def on_upload(e: events.UploadEventArguments) -> None:
+        async def on_upload(e: events.UploadEventArguments) -> None:
             try:
                 temp_dir = Path(tempfile.gettempdir()) / "tecjustica"
                 temp_dir.mkdir(exist_ok=True)
-                dest = temp_dir / e.name
-                dest.write_bytes(e.content.read())
+                dest = temp_dir / e.file.name
+                dest.write_bytes(await e.file.read())
                 path = str(dest)
                 _estado.arquivo = path
                 caminho_input.set_value(path)
-                ui.notify(f"Arquivo carregado: {e.name}", type="positive")
+                ui.notify(f"Arquivo carregado: {e.file.name}", type="positive")
             except Exception as exc:
                 ui.notify(f"Erro ao salvar arquivo: {exc}", type="negative")
 
