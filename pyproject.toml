@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tecjustica-transcribe"
-version = "0.1.8"
+version = "0.1.9"
 description = "CLI para transcrição de audiências judiciais com WhisperX e diarização"
 readme = "README.md"
 license = "MIT"
@@ -30,6 +30,8 @@ dependencies = [
 gui = [
     "nicegui>=2.0",
     "pywebview>=5.0",
+    "PyGObject>=3.50",
+    "pycairo>=1.25",
 ]
 
 [project.scripts]

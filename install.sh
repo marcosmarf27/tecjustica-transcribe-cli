@@ -163,15 +163,6 @@ else
     success "Pacote instalado"
 fi
 
-step "Instalando PyGObject (interface nativa)"
-TOOL_VENV="$HOME/.local/share/uv/tools/$PACKAGE"
-if [ -d "$TOOL_VENV" ]; then
-    uv pip install --python "$TOOL_VENV/bin/python" PyGObject
-    success "PyGObject instalado"
-else
-    warn "Venv do uv tool não encontrado em $TOOL_VENV — PyGObject não instalado"
-fi
-
 # ── Verificar PATH ──────────────────────────────────────────────────
 step "Verificando PATH"
 
