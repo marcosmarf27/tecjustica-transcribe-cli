@@ -53,29 +53,35 @@ O comando `init` vai pedir esse token e salvá-lo na sua máquina.
 
 ## Instalação
 
-Primeiro, instale o `uv` (se ainda não tiver):
-
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.bashrc  # recarregar o terminal
+curl -fsSL https://raw.githubusercontent.com/marcosmarf27/tecjustica-transcribe/main/install.sh | bash
 ```
 
-Depois, instale o `tecjustica-transcribe`:
+O script instala automaticamente: Python, dependências, ffmpeg e o app.
+
+Após instalar, execute:
 
 ```bash
-uv tool install tecjustica-transcribe
-```
-
-Alternativa com pip (se preferir não usar uv):
-
-```bash
-pip install tecjustica-transcribe
+tecjustica-transcribe init    # configurar GPU e token HuggingFace
+tecjustica-gui                # abrir interface gráfica
 ```
 
 ### Atualizar para versão mais recente
 
 ```bash
-uv tool install tecjustica-transcribe --force --refresh
+curl -fsSL https://raw.githubusercontent.com/marcosmarf27/tecjustica-transcribe/main/install.sh | bash -s -- --update
+```
+
+Ou, se já tem o script localmente:
+
+```bash
+bash install.sh --update
+```
+
+### Desinstalar
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/marcosmarf27/tecjustica-transcribe/main/install.sh | bash -s -- --uninstall
 ```
 
 ## Passo a Passo: Do Zero à Transcrição
@@ -166,20 +172,13 @@ wsl --install
 ```
 
 ```bash
-# 2. Abrir o Ubuntu (WSL2) e instalar dependências
-sudo apt update && sudo apt install -y ffmpeg python3.12
+# 2. Abrir o Ubuntu (WSL2) e instalar tudo com um comando
+curl -fsSL https://raw.githubusercontent.com/marcosmarf27/tecjustica-transcribe/main/install.sh | bash
 
-# 3. Instalar uv (gerenciador de pacotes Python)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.bashrc
-
-# 4. Instalar tecjustica-transcribe
-uv tool install tecjustica-transcribe
-
-# 5. Configurar (só uma vez — pede o token HuggingFace)
+# 3. Configurar (só uma vez — pede o token HuggingFace)
 tecjustica-transcribe init
 
-# 6. Transcrever! (arquivo do Windows acessível via /mnt/c/)
+# 4. Transcrever! (arquivo do Windows acessível via /mnt/c/)
 tecjustica-transcribe transcrever /mnt/c/Users/SeuUsuario/Downloads/audiencia.mp4
 ```
 

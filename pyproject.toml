@@ -34,8 +34,6 @@ gui = [
 
 [project.scripts]
 tecjustica-transcribe = "tecjustica_transcribe.cli:main"
-
-[project.gui-scripts]
 tecjustica-gui = "tecjustica_transcribe.gui.app:main"
 
 [tool.hatch.build.targets.sdist]
