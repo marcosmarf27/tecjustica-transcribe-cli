@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -127,72 +128,98 @@ def executar_pipeline(
     compute_type = "float16" if device == "cuda" else "int8"
     batch_size = config.batch_size or _obter_batch_size()
 
-    # 1. Carregar modelo
-    _progress("modelo", "Carregando modelo WhisperX...")
-    model = whisperx.load_model(
-        config.modelo,
-        device=device,
-        compute_type=compute_type,
-        language=config.idioma,
-    )
-    _progress("modelo", "Modelo carregado")
+    def _liberar_vram(*refs: object) -> None:
+        """Deleta referências e libera VRAM."""
+        for ref in refs:
+            del ref
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
-    # 2. Carregar áudio
-    _progress("audio", "Carregando áudio...")
-    audio = whisperx.load_audio(str(config.arquivo))
-    _progress("audio", "Áudio carregado")
+    try:
+        # 1. Carregar modelo
+        _progress("modelo", "Carregando modelo WhisperX...")
+        model = whisperx.load_model(
+            config.modelo,
+            device=device,
+            compute_type=compute_type,
+            language=config.idioma,
+        )
+        _progress("modelo", "Modelo carregado")
 
-    # 3. Transcrever
-    _progress("transcricao", f"Transcrevendo (batch_size={batch_size})...")
-    result = model.transcribe(audio, batch_size=batch_size)
-    _progress("transcricao", "Transcrição concluída")
+        # 2. Carregar áudio
+        _progress("audio", "Carregando áudio...")
+        audio = whisperx.load_audio(str(config.arquivo))
+        _progress("audio", "Áudio carregado")
 
-    # 4. Alinhar timestamps
-    _progress("alinhamento", "Alinhando timestamps...")
-    model_a, metadata = whisperx.load_align_model(
-        language_code=config.idioma, device=device
-    )
-    result = whisperx.align(
-        result["segments"], model_a, metadata, audio, device=device
-    )
-    _progress("alinhamento", "Timestamps alinhados")
+        # 3. Transcrever
+        _progress("transcricao", f"Transcrevendo (batch_size={batch_size})...")
+        result = model.transcribe(audio, batch_size=batch_size)
+        _progress("transcricao", "Transcrição concluída")
 
-    # 5. Diarizar (se solicitado)
-    if config.diarizacao:
-        if not hf_token:
-            raise ValueError(
-                "Token HuggingFace necessário para diarização. "
-                "Configure com 'tecjustica-transcribe init' ou desabilite diarização."
-            )
-        _progress("diarizacao", "Identificando falantes...")
-        from whisperx.diarize import DiarizationPipeline
+        # Liberar modelo whisper — não é mais necessário
+        _liberar_vram(model)
+        model = None  # noqa: F841
 
-        diarize_model = DiarizationPipeline(token=hf_token, device=device)
-        diarize_segments = diarize_model(audio)
-        result = whisperx.assign_word_speakers(diarize_segments, result)
-        _progress("diarizacao", "Falantes identificados")
+        # 4. Alinhar timestamps
+        _progress("alinhamento", "Alinhando timestamps...")
+        model_a, metadata = whisperx.load_align_model(
+            language_code=config.idioma, device=device
+        )
+        result = whisperx.align(
+            result["segments"], model_a, metadata, audio, device=device
+        )
+        _progress("alinhamento", "Timestamps alinhados")
 
-    segments = (
-        result.get("segments", result) if isinstance(result, dict) else result
-    )
+        # Liberar modelo de alinhamento
+        _liberar_vram(model_a)
+        model_a = None  # noqa: F841
 
-    # 6. Salvar arquivos
-    config.output_dir.mkdir(parents=True, exist_ok=True)
-    nome_base = config.arquivo.stem
+        # 5. Diarizar (se solicitado)
+        if config.diarizacao:
+            if not hf_token:
+                raise ValueError(
+                    "Token HuggingFace necessário para diarização. "
+                    "Configure com 'tecjustica-transcribe init' ou desabilite diarização."
+                )
+            _progress("diarizacao", "Identificando falantes...")
+            from whisperx.diarize import DiarizationPipeline
 
-    caminho_srt = config.output_dir / f"{nome_base}.srt"
-    caminho_txt = config.output_dir / f"{nome_base}.txt"
-    caminho_json = config.output_dir / f"{nome_base}.json"
+            diarize_model = DiarizationPipeline(token=hf_token, device=device)
+            diarize_segments = diarize_model(audio)
+            result = whisperx.assign_word_speakers(diarize_segments, result)
+            _progress("diarizacao", "Falantes identificados")
 
-    _progress("salvando", "Salvando arquivos...")
-    _salvar_srt(segments, caminho_srt)
-    _salvar_txt(segments, caminho_txt)
-    _salvar_json(segments, caminho_json)
-    _progress("salvando", "Arquivos salvos")
+            # Liberar modelo de diarização
+            _liberar_vram(diarize_model)
+            diarize_model = None  # noqa: F841
 
-    return TranscriptionResult(
-        segments=segments,
-        caminho_srt=caminho_srt,
-        caminho_txt=caminho_txt,
-        caminho_json=caminho_json,
-    )
+        segments = (
+            result.get("segments", result) if isinstance(result, dict) else result
+        )
+
+        # 6. Salvar arquivos
+        config.output_dir.mkdir(parents=True, exist_ok=True)
+        nome_base = config.arquivo.stem
+
+        caminho_srt = config.output_dir / f"{nome_base}.srt"
+        caminho_txt = config.output_dir / f"{nome_base}.txt"
+        caminho_json = config.output_dir / f"{nome_base}.json"
+
+        _progress("salvando", "Salvando arquivos...")
+        _salvar_srt(segments, caminho_srt)
+        _salvar_txt(segments, caminho_txt)
+        _salvar_json(segments, caminho_json)
+        _progress("salvando", "Arquivos salvos")
+
+        return TranscriptionResult(
+            segments=segments,
+            caminho_srt=caminho_srt,
+            caminho_txt=caminho_txt,
+            caminho_json=caminho_json,
+        )
+    finally:
+        # Limpeza final garantida — mesmo em caso de erro
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
